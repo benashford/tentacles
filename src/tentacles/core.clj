@@ -9,6 +9,7 @@
             [cemerick.url :as url]))
 
 (def url "https://api.github.com/")
+(def last-request-headers (ref {}))
 
 ;; The Github API expects json with underscores and such. cheshire can
 ;; turn our keywords into strings, but it doesn't replace hyphens with
@@ -47,6 +48,9 @@
    If 400, 422, 404, 204, or 500, return the original response with the body parsed
    as json. Otherwise, parse and return the body."
   [resp]
+  (dosync
+   (doseq [header ["x-ratelimit-limit" "x-ratelimit-remaining"]]
+     (alter last-request-headers assoc header (Integer/parseInt (get-in resp [:headers header] "0")))))
   (if (#{400 401 204 422 404 500} (:status resp))
     (update-in resp [:body] parse-json)
     (let [links (parse-links (get-in resp [:headers "link"] ""))]
@@ -99,7 +103,6 @@
                            (safe-parse (http/request req)))
         exec-request (fn exec-request [req]
                        (let [resp (exec-request-one req)]
-                         (-> resp meta :links)
                          (if (and all-pages? (-> resp meta :links :next))
                            (let [new-req (update-req req (-> resp meta :links :next))]
                              (lazy-cat resp (exec-request new-req)))
@@ -110,3 +113,8 @@
 (defn api-call [method end-point positional query]
   (let [query (query-map query)]
     (make-request method end-point positional query)))
+
+;; Quota state at the end of the last request
+(defn quota-state []
+  {:limit (last-request-headers "x-ratelimit-limit")
+   :remaining (last-request-headers "x-ratelimit-remaining")})
